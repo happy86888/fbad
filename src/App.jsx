@@ -1,11 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Flame } from 'lucide-react';
 
-import { LANGUAGES, STYLE_NAMES } from './data/constants';
-import {
-  getHeadline, getPrimaryText, getDescription, getCTA,
-  getImagePrompt, getImageDirection, generateGPTPrompt
-} from './templates';
+import { LANGUAGES, OPENAI_MODELS, GROQ_MODELS } from './data/constants';
+import { generateGPTPrompt } from './templates';
 import {
   generateAds, analyzeCompetitor, regenerateAngle,
   scoreAds, generateVideoScripts, generateImage
@@ -26,9 +23,24 @@ import BrandManager from './components/BrandManager';
 import BatchModal from './components/BatchModal';
 import FBPreview from './components/FBPreview';
 
+// 從網址讀 provider:?groq → Groq 測試模式,否則預設 OpenAI
+const detectProvider = () => {
+  if (typeof window === 'undefined') return 'openai';
+  const params = new URLSearchParams(window.location.search);
+  // 支援 ?groq 或 ?groq=1 或 ?mode=groq
+  if (params.has('groq') || params.get('mode') === 'groq') {
+    return 'groq';
+  }
+  return 'openai';
+};
+
 export default function App() {
   // 通行碼
   const [isUnlocked, setIsUnlocked] = useState(() => safeLocalStorage.get('adbot_unlocked') === 'true');
+
+  // Provider 從網址判斷(每次重新整理都會重新判斷,不存 localStorage)
+  const [provider] = useState(() => detectProvider());
+  const isGroqMode = provider === 'groq';
 
   // 表單條件
   const [industry, setIndustry] = useState('');
@@ -37,12 +49,16 @@ export default function App() {
   const [tone, setTone] = useState('專業');
   const [goal, setGoal] = useState('提升轉換');
 
-  // API 設定
-  const [apiKey, setApiKey] = useLocalStorage('adbot_api_key', '');
+  // API 設定 (Key 和 model 依 provider 分開存)
+  const keyStorageName = isGroqMode ? 'adbot_groq_key' : 'adbot_api_key';
+  const modelStorageName = isGroqMode ? 'adbot_groq_model' : 'adbot_openai_model';
+  const defaultModel = isGroqMode ? GROQ_MODELS[0].id : OPENAI_MODELS[0].id;
+
+  const [apiKey, setApiKey] = useLocalStorage(keyStorageName, '');
   const [language, setLanguage] = useLocalStorage('adbot_language', 'zh-TW');
-  const [model, setModel] = useState('gpt-4o-mini');
+  const [model, setModel] = useLocalStorage(modelStorageName, defaultModel);
   const [imageModel, setImageModel] = useState('dall-e-3');
-  const [useAPI, setUseAPI] = useState(false);
+  const [useAPI, setUseAPI] = useState(true);  // 預設開啟,但保留開關
   const [enableImageGen, setEnableImageGen] = useState(false);
 
   // 狀態
@@ -97,6 +113,13 @@ export default function App() {
   useEffect(() => {
     return injectNoIndex();
   }, []);
+
+  // Groq 模式時自動關掉出圖(Groq 不支援)
+  useEffect(() => {
+    if (isGroqMode && enableImageGen) {
+      setEnableImageGen(false);
+    }
+  }, [isGroqMode]);
 
   // 過濾後的歷史 (依品牌)
   const filteredHistory = currentBrand === 'default'
@@ -155,8 +178,7 @@ export default function App() {
   // ============ 範本 ============
   const saveTemplate = (name) => {
     const newTpl = {
-      id: Date.now(),
-      name,
+      id: Date.now(), name,
       industry, product, audience, tone, goal, language,
       timestamp: new Date().toISOString()
     };
@@ -243,62 +265,21 @@ export default function App() {
       setError('請先輸入產業類別');
       return;
     }
+    if (!useAPI) {
+      setError('請開啟 API 開關才能生成廣告');
+      return;
+    }
+    if (!apiKey.trim()) {
+      setError(isGroqMode
+        ? '請輸入 Groq API Key (到 https://console.groq.com/keys 免費取得)'
+        : '請輸入 OpenAI API Key (到 https://platform.openai.com/api-keys 取得)');
+      return;
+    }
+
     setError('');
     setActiveVariant({});
-
-    if (useAPI) {
-      if (!apiKey.trim()) {
-        setError('請輸入 OpenAI API Key,或關閉「使用 GPT API」改用內建模板');
-        return;
-      }
-      await generateAPIBased();
-    } else {
-      if (language !== 'zh-TW') {
-        setError('非繁體中文需開啟 GPT API (內建模板只支援繁中)');
-        return;
-      }
-      generateTemplateBased();
-    }
-  };
-
-  const generateTemplateBased = () => {
     setLoading(true);
-    setTimeout(() => {
-      const productName = product || `${industry}相關產品/服務`;
-      const targetAudience = audience || `${industry}潛在客戶`;
 
-      const copies = [0, 1, 2].map(i => ({
-        style: STYLE_NAMES[i],
-        variants: [0, 1].map(ab => ({
-          label: ab === 0 ? 'A 版' : 'B 版',
-          headline: getHeadline(industry, tone, i, ab),
-          primary: getPrimaryText(industry, productName, targetAudience, tone, goal, i, ab),
-          description: getDescription(tone, i, ab),
-          cta: getCTA(goal, i, ab),
-          imagePrompt: getImagePrompt(industry, productName, tone, i, ab),
-          imageDirection: getImageDirection(industry, productName, tone, i, ab),
-          generatedImage: null
-        }))
-      }));
-
-      const record = {
-        id: Date.now(),
-        timestamp: new Date().toISOString(),
-        copies,
-        gptPrompt: generateGPTPrompt(industry, productName, targetAudience, tone, goal, language, LANGUAGES),
-        industry, productName, targetAudience, tone, goal, language,
-        source: 'template',
-        brand: currentBrand
-      };
-      setGenerated(record);
-      saveToHistory(record);
-      setLoading(false);
-    }, 600);
-  };
-
-  const generateAPIBased = async () => {
-    setLoading(true);
-    setError('');
     const productName = product || `${industry}相關產品/服務`;
     const targetAudience = audience || `${industry}潛在客戶`;
     const langName = LANGUAGES.find(l => l.id === language)?.name || '繁體中文';
@@ -320,7 +301,7 @@ export default function App() {
         copies: processedCopies,
         gptPrompt: generateGPTPrompt(industry, productName, targetAudience, tone, goal, language, LANGUAGES),
         industry, productName, targetAudience, tone, goal, language,
-        source: 'api', usage,
+        source: 'api', provider, model, usage,
         competitorAnalysis,
         brand: currentBrand
       };
@@ -336,7 +317,7 @@ export default function App() {
   // ============ 競品分析 ============
   const handleAnalyzeCompetitor = async () => {
     if (!apiKey.trim()) {
-      setError('競品分析需要 OpenAI API Key');
+      setError('競品分析需要 API Key');
       return;
     }
     if (!competitorUrls.trim() && !competitorText.trim()) {
@@ -363,8 +344,8 @@ export default function App() {
 
   // ============ 重新生成單一切角 ============
   const handleRegenerateAngle = async (copyIdx) => {
-    if (!apiKey.trim() || !useAPI) {
-      setError('重新生成需要開啟 GPT API + 輸入 API Key');
+    if (!apiKey.trim()) {
+      setError('重新生成需要 API Key');
       return;
     }
     const regenKey = `angle-${copyIdx}`;
@@ -390,6 +371,10 @@ export default function App() {
 
   // ============ DALL-E 出圖 ============
   const handleGenerateImage = async (copyIdx, variantIdx) => {
+    if (isGroqMode) {
+      setError('Groq 不支援圖片生成');
+      return;
+    }
     if (!apiKey.trim()) {
       setError('請先輸入 OpenAI API Key 才能出圖');
       return;
@@ -413,7 +398,7 @@ export default function App() {
 
   // ============ AI 評分 ============
   const handleScoreAds = async () => {
-    if (!apiKey.trim()) { setError('AI 評分需要 OpenAI API Key'); return; }
+    if (!apiKey.trim()) { setError('AI 評分需要 API Key'); return; }
     if (!generated) return;
     setScoring(true);
     setError('');
@@ -430,7 +415,7 @@ export default function App() {
 
   // ============ 影片腳本 ============
   const handleGenerateVideo = async () => {
-    if (!apiKey.trim()) { setError('影片腳本需要 OpenAI API Key'); return; }
+    if (!apiKey.trim()) { setError('影片腳本需要 API Key'); return; }
     if (!generated) return;
     setGeneratingVideo(true);
     setError('');
@@ -449,7 +434,7 @@ export default function App() {
 
   // ============ 批次生成 ============
   const handleBatchRun = async () => {
-    if (!useAPI || !apiKey.trim()) { setError('批次生成需要開啟 GPT API + 輸入 API Key'); return; }
+    if (!apiKey.trim()) { setError('批次生成需要 API Key'); return; }
     const productList = batchProducts.split('\n').map(p => p.trim()).filter(p => p);
     if (productList.length === 0) { setError('請輸入至少一個產品名稱'); return; }
     if (!industry.trim()) { setError('請先填寫產業類別 (批次共用)'); return; }
@@ -480,7 +465,7 @@ export default function App() {
           copies: processedCopies,
           gptPrompt: generateGPTPrompt(industry, productName, targetAudience, tone, goal, language, LANGUAGES),
           industry, productName, targetAudience, tone, goal, language,
-          source: 'api', usage, brand: currentBrand
+          source: 'api', provider, model, usage, brand: currentBrand
         };
         saveToHistory(record);
         await new Promise(r => setTimeout(r, 500));
@@ -512,7 +497,8 @@ export default function App() {
     isFavorite, toggleFavorite,
     setPreviewMode,
     regenerating, onRegenerate: handleRegenerateAngle,
-    useAPI, enableImageGen,
+    useAPI,
+    enableImageGen,
     imageLoading, onGenerateImage: handleGenerateImage,
     editingVariant, editBuffer, setEditBuffer,
     onStartEdit: startEdit, onSaveEdit: saveEdit, onCancelEdit: cancelEdit
@@ -566,7 +552,8 @@ export default function App() {
       <main className="max-w-6xl mx-auto px-6 py-12">
         <div className="mb-10">
           <div className="inline-block px-3 py-1 border border-zinc-700 rounded-full font-mono text-xs text-zinc-400 mb-4">
-            // v5.0 · 全功能終極版
+            // v5.1 · AI 廣告生成器
+            {isGroqMode && <span className="ml-2 text-pink-400">[GROQ TEST MODE]</span>}
           </div>
           <h2 className="font-display text-5xl md:text-7xl leading-[0.95] mb-6">
             讓滑到的人<br />
@@ -579,11 +566,13 @@ export default function App() {
         </div>
 
         <ApiSettings
+          provider={provider}
           apiKey={apiKey} setApiKey={setApiKey}
           model={model} setModel={setModel}
           imageModel={imageModel} setImageModel={setImageModel}
           useAPI={useAPI} setUseAPI={setUseAPI}
           enableImageGen={enableImageGen} setEnableImageGen={setEnableImageGen}
+          groqMode={isGroqMode}
         />
 
         <CompetitorAnalysis
@@ -627,7 +616,7 @@ export default function App() {
 
       <footer className="border-t border-zinc-800 mt-16">
         <div className="max-w-6xl mx-auto px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs font-mono text-zinc-600">
-          <span>© 老闆接案學院 AD/BOT v5.0 · 全功能終極版</span>
+          <span>© 老闆接案學院 AD/BOT v5.1</span>
           <span>API Key 與歷史紀錄僅存在瀏覽器 localStorage</span>
         </div>
       </footer>

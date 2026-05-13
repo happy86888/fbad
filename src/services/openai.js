@@ -1,21 +1,40 @@
-// OpenAI API 呼叫封裝
+// OpenAI / Groq API 呼叫封裝
+
+// 各 provider 的 endpoint
+const API_ENDPOINTS = {
+  openai: 'https://api.openai.com/v1/chat/completions',
+  groq: 'https://api.groq.com/openai/v1/chat/completions'
+};
+
+// 判斷 provider:看模型 ID 開頭
+const getProvider = (model) => {
+  if (model.startsWith('llama') || model.startsWith('mixtral') || model.startsWith('gemma') || model.startsWith('moonshot') || model.startsWith('deepseek') || model.startsWith('qwen')) {
+    return 'groq';
+  }
+  return 'openai';
+};
 
 const callChatAPI = async ({ apiKey, model, systemPrompt, userPrompt, temperature = 0.8 }) => {
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+  const provider = getProvider(model);
+  const endpoint = API_ENDPOINTS[provider];
+
+  const body = {
+    model,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt }
+    ],
+    temperature,
+    response_format: { type: 'json_object' }
+  };
+
+  const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`
     },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      temperature,
-      response_format: { type: 'json_object' }
-    })
+    body: JSON.stringify(body)
   });
 
   if (!response.ok) {
@@ -26,7 +45,8 @@ const callChatAPI = async ({ apiKey, model, systemPrompt, userPrompt, temperatur
   const data = await response.json();
   return {
     parsed: JSON.parse(data.choices[0].message.content),
-    usage: data.usage
+    usage: data.usage,
+    provider
   };
 };
 
