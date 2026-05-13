@@ -5,7 +5,8 @@ import { LANGUAGES, OPENAI_MODELS, GROQ_MODELS } from './data/constants';
 import { generateGPTPrompt } from './templates';
 import {
   generateAds, analyzeCompetitor, regenerateAngle,
-  scoreAds, generateVideoScripts, generateImage
+  scoreAds, generateVideoScripts, generateImage,
+  analyzeIndustry
 } from './services/openai';
 import { useLocalStorage } from './hooks/useLocalStorage';
 import { safeLocalStorage, injectNoIndex } from './utils/helpers';
@@ -22,6 +23,7 @@ import TemplatesDrawer from './components/TemplatesDrawer';
 import BrandManager from './components/BrandManager';
 import BatchModal from './components/BatchModal';
 import FBPreview from './components/FBPreview';
+import IndustryReview from './components/IndustryReview';
 
 // 從網址讀 provider:?groq → Groq 測試模式,否則預設 OpenAI
 const detectProvider = () => {
@@ -47,8 +49,17 @@ export default function App() {
   const [product, setProduct] = useState('');
   const [audience, setAudience] = useState('');
   const [tone, setTone] = useState('專業');
+  const [customTone, setCustomTone] = useState('');
   const [goal, setGoal] = useState('提升轉換');
-  const [length, setLength] = useLocalStorage('adbot_length', 'medium');  // short | medium | long
+  const [customGoal, setCustomGoal] = useState('');
+  const [customBrief, setCustomBrief] = useLocalStorage('adbot_brief', '');
+  const [userIndustryRef, setUserIndustryRef] = useLocalStorage('adbot_industry_ref', '');
+  const [length, setLength] = useLocalStorage('adbot_length', 'medium');
+  const [genMode, setGenMode] = useLocalStorage('adbot_gen_mode', 'smart'); // fast | smart | precise
+
+  // 產業審核彈窗
+  const [showIndustryReview, setShowIndustryReview] = useState(false);
+  const [pendingProfile, setPendingProfile] = useState(null);
 
   // API 設定 (Key 和 model 依 provider 分開存)
   const keyStorageName = isGroqMode ? 'adbot_groq_key' : 'adbot_api_key';
@@ -262,7 +273,7 @@ export default function App() {
     if (currentBrand === brandId) setCurrentBrand('default');
   };
 
-  // ============ 主生成邏輯 ============
+  // ============ 主生成邏輯(三種模式) ============
   const handleGenerate = async () => {
     if (!industry.trim()) {
       setError('請先輸入產業類別');
@@ -281,7 +292,42 @@ export default function App() {
 
     setError('');
     setActiveVariant({});
+
+    const langName = LANGUAGES.find(l => l.id === language)?.name || '繁體中文';
+    const hasUserRef = userIndustryRef && userIndustryRef.trim();
+
+    // 快速模式 OR 使用者已填產業參考 → 直接生成
+    if (genMode === 'fast' || hasUserRef) {
+      await doGenerate(null);
+      return;
+    }
+
+    // 智能模式或精準模式 → 先分析產業
     setLoading(true);
+    try {
+      const { parsed: profile } = await analyzeIndustry({
+        apiKey, model, industry, productName: product, targetAudience: audience, langName
+      });
+
+      if (genMode === 'smart') {
+        // 智能模式:分析完直接寫
+        await doGenerate(profile);
+      } else if (genMode === 'precise') {
+        // 精準模式:顯示審核彈窗
+        setPendingProfile(profile);
+        setShowIndustryReview(true);
+        setLoading(false);
+      }
+    } catch (err) {
+      setError(`產業分析失敗:${err.message}`);
+      setLoading(false);
+    }
+  };
+
+  // 真正執行廣告生成
+  const doGenerate = async (industryProfile) => {
+    setLoading(true);
+    setError('');
 
     const productName = product || `${industry}相關產品/服務`;
     const targetAudience = audience || `${industry}潛在客戶`;
@@ -291,7 +337,10 @@ export default function App() {
       const { parsed, usage } = await generateAds({
         apiKey, model, industry, productName, targetAudience,
         tone, goal, language, langName, competitorAnalysis,
-        length
+        length,
+        customTone, customGoal, customBrief,
+        industryProfile,
+        userIndustryRef
       });
 
       const processedCopies = parsed.copies.map(copy => ({
@@ -306,6 +355,8 @@ export default function App() {
         gptPrompt: generateGPTPrompt(industry, productName, targetAudience, tone, goal, language, LANGUAGES),
         industry, productName, targetAudience, tone, goal, language,
         source: 'api', provider, model, usage, length,
+        customTone, customGoal, customBrief,
+        userIndustryRef, industryProfile, genMode,
         competitorAnalysis,
         brand: currentBrand
       };
@@ -316,6 +367,13 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // 精準模式:確認產業分析後產文案
+  const handleConfirmProfile = async (editedProfile) => {
+    setShowIndustryReview(false);
+    setPendingProfile(null);
+    await doGenerate(editedProfile);
   };
 
   // ============ 競品分析 ============
@@ -458,7 +516,9 @@ export default function App() {
         const { parsed, usage } = await generateAds({
           apiKey, model, industry, productName, targetAudience,
           tone, goal, language, langName, competitorAnalysis,
-          length
+          length,
+          customTone, customGoal, customBrief,
+          userIndustryRef
         });
         const processedCopies = parsed.copies.map(copy => ({
           ...copy,
@@ -555,6 +615,13 @@ export default function App() {
 
       <FBPreview previewMode={previewMode} generated={generated} onClose={() => setPreviewMode(null)} />
 
+      <IndustryReview
+        show={showIndustryReview}
+        profile={pendingProfile}
+        onClose={() => { setShowIndustryReview(false); setPendingProfile(null); }}
+        onConfirm={handleConfirmProfile}
+      />
+
       <main className="max-w-6xl mx-auto px-6 py-12">
         <div className="mb-10">
           <div className="inline-block px-3 py-1 border border-zinc-700 rounded-full font-mono text-xs text-zinc-400 mb-4">
@@ -595,8 +662,13 @@ export default function App() {
           product={product} setProduct={setProduct}
           audience={audience} setAudience={setAudience}
           tone={tone} setTone={setTone}
+          customTone={customTone} setCustomTone={setCustomTone}
           goal={goal} setGoal={setGoal}
+          customGoal={customGoal} setCustomGoal={setCustomGoal}
+          customBrief={customBrief} setCustomBrief={setCustomBrief}
+          userIndustryRef={userIndustryRef} setUserIndustryRef={setUserIndustryRef}
           length={length} setLength={setLength}
+          genMode={genMode} setGenMode={setGenMode}
           loading={loading} useAPI={useAPI} error={error}
           hasCompetitor={!!competitorAnalysis}
           onGenerate={handleGenerate} onShowBatch={() => setShowBatch(true)}
@@ -622,9 +694,18 @@ export default function App() {
       </main>
 
       <footer className="border-t border-zinc-800 mt-16">
-        <div className="max-w-6xl mx-auto px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs font-mono text-zinc-600">
-          <span>© 老闆接案學院 AD/BOT v5.1</span>
-          <span>API Key 與歷史紀錄僅存在瀏覽器 localStorage</span>
+        <div className="max-w-6xl mx-auto px-6 py-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs font-mono text-zinc-600">
+          <span>© 老闆接案學院 AD/BOT v5.4</span>
+          <div className="flex items-center gap-3">
+            <a href="https://lin.ee/6PuIdSx" target="_blank" rel="noopener noreferrer"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-[#06C755] hover:bg-[#05a647] text-white rounded-full transition no-underline">
+              <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M19.365 9.863c.349 0 .63.285.63.631 0 .345-.281.63-.63.63H17.61v1.125h1.755c.349 0 .63.283.63.63 0 .344-.281.629-.63.629h-2.386c-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.63-.63h2.386c.346 0 .627.285.627.63 0 .349-.281.63-.63.63H17.61v1.125h1.755zm-3.855 3.016c0 .27-.174.51-.432.596-.064.021-.133.031-.199.031-.211 0-.391-.09-.51-.25l-2.443-3.317v2.94c0 .344-.279.629-.631.629-.346 0-.626-.285-.626-.629V8.108c0-.27.173-.51.43-.595.06-.023.136-.033.194-.033.195 0 .375.104.495.254l2.462 3.33V8.108c0-.345.282-.63.63-.63.345 0 .63.285.63.63v4.771zm-5.741 0c0 .344-.282.629-.631.629-.345 0-.627-.285-.627-.629V8.108c0-.345.282-.63.63-.63.346 0 .628.285.628.63v4.771zm-2.466.629H4.917c-.345 0-.63-.285-.63-.629V8.108c0-.345.285-.63.63-.63.348 0 .63.285.63.63v4.141h1.756c.348 0 .629.283.629.63 0 .344-.282.629-.629.629M24 10.314C24 4.943 18.615.572 12 .572S0 4.943 0 10.314c0 4.811 4.27 8.842 10.035 9.608.391.082.923.258 1.058.59.12.301.079.766.038 1.08l-.164 1.02c-.045.301-.24 1.186 1.049.645 1.291-.539 6.916-4.078 9.436-6.975C23.176 14.393 24 12.458 24 10.314"/>
+              </svg>
+              聯絡 LINE
+            </a>
+            <span className="hidden sm:inline">API Key 與紀錄僅存於瀏覽器 localStorage</span>
+          </div>
         </div>
       </footer>
     </div>
