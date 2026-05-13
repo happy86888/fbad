@@ -48,6 +48,7 @@ export default function App() {
   const [audience, setAudience] = useState('');
   const [tone, setTone] = useState('專業');
   const [goal, setGoal] = useState('提升轉換');
+  const [length, setLength] = useLocalStorage('adbot_length', 'medium');  // short | medium | long
 
   // API 設定 (Key 和 model 依 provider 分開存)
   const keyStorageName = isGroqMode ? 'adbot_groq_key' : 'adbot_api_key';
@@ -160,6 +161,7 @@ export default function App() {
     setTone(record.tone);
     setGoal(record.goal);
     if (record.language) setLanguage(record.language);
+    if (record.length) setLength(record.length);
     setActiveVariant({});
     setShowHistory(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -179,7 +181,7 @@ export default function App() {
   const saveTemplate = (name) => {
     const newTpl = {
       id: Date.now(), name,
-      industry, product, audience, tone, goal, language,
+      industry, product, audience, tone, goal, language, length,
       timestamp: new Date().toISOString()
     };
     setTemplates([newTpl, ...templates].slice(0, 50));
@@ -192,6 +194,7 @@ export default function App() {
     setTone(tpl.tone || '專業');
     setGoal(tpl.goal || '提升轉換');
     if (tpl.language) setLanguage(tpl.language);
+    if (tpl.length) setLength(tpl.length);
     setShowTemplates(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -287,7 +290,8 @@ export default function App() {
     try {
       const { parsed, usage } = await generateAds({
         apiKey, model, industry, productName, targetAudience,
-        tone, goal, language, langName, competitorAnalysis
+        tone, goal, language, langName, competitorAnalysis,
+        length
       });
 
       const processedCopies = parsed.copies.map(copy => ({
@@ -301,7 +305,7 @@ export default function App() {
         copies: processedCopies,
         gptPrompt: generateGPTPrompt(industry, productName, targetAudience, tone, goal, language, LANGUAGES),
         industry, productName, targetAudience, tone, goal, language,
-        source: 'api', provider, model, usage,
+        source: 'api', provider, model, usage, length,
         competitorAnalysis,
         brand: currentBrand
       };
@@ -355,7 +359,7 @@ export default function App() {
     const langName = LANGUAGES.find(l => l.id === (generated.language || 'zh-TW'))?.name || '繁體中文';
 
     try {
-      const { parsed } = await regenerateAngle({ apiKey, model, generated, copyIdx, langName });
+      const { parsed } = await regenerateAngle({ apiKey, model, generated, copyIdx, langName, length: generated.length || length });
       const newCopies = [...generated.copies];
       newCopies[copyIdx] = {
         ...parsed,
@@ -453,7 +457,8 @@ export default function App() {
       try {
         const { parsed, usage } = await generateAds({
           apiKey, model, industry, productName, targetAudience,
-          tone, goal, language, langName, competitorAnalysis
+          tone, goal, language, langName, competitorAnalysis,
+          length
         });
         const processedCopies = parsed.copies.map(copy => ({
           ...copy,
@@ -465,7 +470,8 @@ export default function App() {
           copies: processedCopies,
           gptPrompt: generateGPTPrompt(industry, productName, targetAudience, tone, goal, language, LANGUAGES),
           industry, productName, targetAudience, tone, goal, language,
-          source: 'api', provider, model, usage, brand: currentBrand
+          source: 'api', provider, model, usage, brand: currentBrand,
+          length
         };
         saveToHistory(record);
         await new Promise(r => setTimeout(r, 500));
@@ -590,6 +596,7 @@ export default function App() {
           audience={audience} setAudience={setAudience}
           tone={tone} setTone={setTone}
           goal={goal} setGoal={setGoal}
+          length={length} setLength={setLength}
           loading={loading} useAPI={useAPI} error={error}
           hasCompetitor={!!competitorAnalysis}
           onGenerate={handleGenerate} onShowBatch={() => setShowBatch(true)}

@@ -2,12 +2,19 @@ import React from 'react';
 import { Target, AlertCircle, RefreshCw, Wand2, ChevronRight, Zap } from 'lucide-react';
 import { TONES, GOALS } from '../data/constants';
 
+const LENGTH_OPTIONS = [
+  { id: 'short', label: '短 (100-150 字)', hint: '促銷、簡訊、活動公告' },
+  { id: 'medium', label: '中 (250-400 字)', hint: '一般電商、實體商品 (推薦)' },
+  { id: 'long', label: '長 (400-600 字)', hint: '服務業、B2B、複雜產品' },
+];
+
 export default function ConditionForm({
   industry, setIndustry,
   product, setProduct,
   audience, setAudience,
   tone, setTone,
   goal, setGoal,
+  length, setLength,
   loading, useAPI, error, hasCompetitor,
   onGenerate, onShowBatch
 }) {
@@ -52,6 +59,26 @@ export default function ConditionForm({
             {GOALS.map(g => (
               <button key={g} onClick={() => setGoal(g)}
                 className={`px-3 py-2 rounded-lg text-sm transition border ${goal === g ? 'bg-amber-400 text-zinc-950 border-amber-400 font-bold' : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:border-zinc-600'}`}>{g}</button>
+            ))}
+          </div>
+        </div>
+
+        {/* 文案長度選擇 */}
+        <div className="md:col-span-2">
+          <label className="font-mono text-xs text-zinc-500 mb-2 block">文案長度</label>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {LENGTH_OPTIONS.map(opt => (
+              <button key={opt.id} onClick={() => setLength(opt.id)}
+                className={`text-left p-3 rounded-lg border-2 transition ${
+                  length === opt.id
+                    ? 'border-amber-400 bg-amber-400/5'
+                    : 'border-zinc-800 bg-zinc-950 hover:border-zinc-600'
+                }`}>
+                <div className={`font-bold text-sm ${length === opt.id ? 'text-amber-400' : 'text-zinc-200'}`}>
+                  {opt.label}
+                </div>
+                <div className="font-mono text-xs text-zinc-500 mt-0.5">{opt.hint}</div>
+              </button>
             ))}
           </div>
         </div>
